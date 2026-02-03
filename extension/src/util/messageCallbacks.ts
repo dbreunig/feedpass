@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Message, MessageReturn } from "./constants";
 import * as feedbinApi from "./feedbinApi";
+import { fetchFeedMetadata } from "./fetchFeedMetadata";
 import { getFeedStore, getCredentials, getSubscriptions } from "./storage";
 
 type ArgMap = {
@@ -22,13 +23,19 @@ export const messageCallbacks: {
       (sub) => sub.feed_url === args.feedUrl,
     );
 
+    // Fetch the actual feed to get its real title and site link
+    const metadata = await fetchFeedMetadata(args.feedUrl);
+
+    const feedTitle = metadata.title || args.feedTitle;
+    const siteUrl = metadata.siteUrl || args.siteUrl;
+
     await getFeedStore((prev) => {
       const newStore = new Map(prev);
       newStore.set(args.feedUrl, {
         feedUrl: args.feedUrl,
-        feedTitle: args.feedTitle,
+        feedTitle,
         feedType: args.feedType,
-        siteUrl: args.siteUrl,
+        siteUrl,
         discoveredAt: Date.now(),
         seen: isSubscribed,
       });
