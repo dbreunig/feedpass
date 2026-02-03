@@ -1,28 +1,31 @@
 import { createQuery } from "react-query-kit";
-import {
-  getHideProfilesOnClick,
-  getHrefStore,
-  getProfileUrlScheme,
-} from "./storage";
-import { getProfiles } from "./getProfiles";
+import { getFeedStore, getCredentials, getSubscriptions, getShowCommentFeeds } from "./storage";
+import { getFeeds } from "./getFeeds";
 
-export const useHrefStoreQuery = createQuery({
-  queryKey: ["profiles"],
+export const useFeedStoreQuery = createQuery({
+  queryKey: ["feeds"],
   async fetcher() {
-    const hrefStore = await getHrefStore();
-    return {
-      profiles: getProfiles(hrefStore),
-      hiddenProfiles: getProfiles(hrefStore, { hidden: true }),
-    };
+    const [feedStore, subscriptions, showCommentFeeds] = await Promise.all([
+      getFeedStore(),
+      getSubscriptions(),
+      getShowCommentFeeds(),
+    ]);
+    const subscriptionUrls = new Set(subscriptions.map((s) => s.feed_url));
+    return getFeeds(feedStore, subscriptionUrls, showCommentFeeds);
   },
 });
 
-export const useProfileUrlSchemeQuery = createQuery({
-  queryKey: ["profileurlscheme"],
-  fetcher: () => getProfileUrlScheme(),
+export const useCredentialsQuery = createQuery({
+  queryKey: ["credentials"],
+  fetcher: () => getCredentials(),
 });
 
-export const useHideProfilesOnClickQuery = createQuery({
-  queryKey: ["hideprofilesonclick"],
-  fetcher: () => getHideProfilesOnClick(),
+export const useSubscriptionsQuery = createQuery({
+  queryKey: ["subscriptions"],
+  fetcher: () => getSubscriptions(),
+});
+
+export const useShowCommentFeedsQuery = createQuery({
+  queryKey: ["showcommentfeeds"],
+  fetcher: () => getShowCommentFeeds(),
 });

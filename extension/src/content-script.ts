@@ -1,21 +1,18 @@
 /* eslint-env browser */
 
-import type { Message } from "./util/constants.js";
+import type { FeedType, Message } from "./util/constants.js";
 
 function getCurrentUrlSanitized() {
   const url = new URL(window.location.toString());
 
-  // Delete hash
   url.hash = "";
 
-  // Delete UTM parameters https://en.wikipedia.org/wiki/UTM_parameters#UTM_parameters
   url.searchParams.delete("utm_source");
   url.searchParams.delete("utm_medium");
   url.searchParams.delete("utm_campaign");
   url.searchParams.delete("utm_term");
   url.searchParams.delete("utm_content");
 
-  // Delete yahoo trackers https://github.com/brave/adblock-lists/pull/978/files
   url.searchParams.delete("guccounter");
   url.searchParams.delete("guce_referrer");
   url.searchParams.delete("guce_referrer_sig");
@@ -23,26 +20,59 @@ function getCurrentUrlSanitized() {
   return url.toString();
 }
 
-let currentUrlSanitized = getCurrentUrlSanitized();
-const hrefs: Set<string> = new Set();
+const FEED_SELECTOR = [
+  'link[rel="alternate"][type="application/rss+xml"]',
+  'link[rel="alternate"][type="application/atom+xml"]',
+  'link[rel="alternate"][type="application/feed+json"]',
+  'link[rel="alternate"][type="application/json"]',
+].join(",");
 
-function sendHrefs() {
-  const elements = document.querySelectorAll(":is(link, a)[rel~=me]");
+const TYPE_MAP: Record<string, FeedType> = {
+  "application/rss+xml": "rss",
+  "application/atom+xml": "atom",
+  "application/feed+json": "json",
+  "application/json": "json",
+};
+
+let currentUrlSanitized = getCurrentUrlSanitized();
+const discoveredFeedUrls: Set<string> = new Set();
+
+function discoverFeeds() {
+  const elements = document.querySelectorAll(FEED_SELECTOR);
 
   for (const element of elements) {
     const href = element.getAttribute("href");
-    if (href && !hrefs.has(href)) {
-      hrefs.add(href);
+    if (!href) continue;
 
-      const message: Message = {
-        name: "HREF_PAYLOAD",
-        args: {
-          tabUrl: currentUrlSanitized,
-          relMeHref: href,
-        },
-      };
-      browser.runtime.sendMessage(message);
+    let feedUrl: string;
+    try {
+      feedUrl = new URL(href, window.location.href).toString();
+    } catch {
+      continue;
     }
+
+    if (discoveredFeedUrls.has(feedUrl)) continue;
+    discoveredFeedUrls.add(feedUrl);
+
+    const typeAttr = element.getAttribute("type") ?? "";
+    const feedType = TYPE_MAP[typeAttr];
+    if (!feedType) continue;
+
+    const feedTitle =
+      element.getAttribute("title") ||
+      document.title ||
+      new URL(window.location.href).hostname;
+
+    const message: Message = {
+      name: "FEED_DISCOVERED",
+      args: {
+        feedUrl,
+        feedTitle,
+        feedType,
+        siteUrl: currentUrlSanitized,
+      },
+    };
+    browser.runtime.sendMessage(message);
   }
 }
 
@@ -50,14 +80,14 @@ new MutationObserver(() => {
   const testCurrentUrlSanitized = getCurrentUrlSanitized();
   if (currentUrlSanitized !== testCurrentUrlSanitized) {
     currentUrlSanitized = testCurrentUrlSanitized;
-    hrefs.clear();
+    discoveredFeedUrls.clear();
   }
 
-  sendHrefs();
+  discoverFeeds();
 }).observe(document.documentElement, {
   subtree: true,
   childList: true,
-  attributeFilter: ["rel"],
+  attributeFilter: ["rel", "type"],
 });
 
-sendHrefs();
+discoverFeeds();

@@ -3,35 +3,30 @@ import * as React from "react";
 import * as ReactDom from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Popover from "@radix-ui/react-popover";
-import * as Tabs from "@radix-ui/react-tabs";
-import { InView } from "react-intersection-observer";
-import {
-  HrefDataType,
-  Message,
-  MessageReturn,
-  PopupTab,
-  hideProfilesFormId,
-} from "./util/constants";
+import type { FeedInfo, FeedType, Message } from "./util/constants";
 import { getDisplayHref } from "./util/getDisplayHref";
-import { exportProfiles } from "./util/exportProfiles";
-import {
-  getIconState,
-  getHrefStore,
-  getProfileUrlScheme,
-  getHideProfilesOnClick,
-} from "./util/storage";
+import { getIconState, getFeedStore, getCredentials, getSubscriptions, getShowCommentFeeds } from "./util/storage";
 import { cx } from "class-variance-authority";
-import { getProfileUrl } from "./util/getProfileUrl";
-import { downloadLink } from "../../constants";
 import { getHrefProps } from "./util/getHrefProps";
-import {
-  useHrefStoreQuery,
-  useProfileUrlSchemeQuery,
-  useHideProfilesOnClickQuery,
-} from "./util/reactQuery";
+import { getDisplayHref as getDisplayFeedUrl } from "./util/getDisplayHref";
+import { useFeedStoreQuery, useCredentialsQuery, useShowCommentFeedsQuery } from "./util/reactQuery";
+import { authenticate } from "./util/feedbinApi";
 
 getIconState(() => {
   return { state: "off" };
+});
+
+// Mark all unseen feeds as seen when popup opens
+getFeedStore((prev) => {
+  let changed = false;
+  const store = new Map(prev);
+  for (const [key, feed] of store) {
+    if (!feed.seen) {
+      store.set(key, { ...feed, seen: true });
+      changed = true;
+    }
+  }
+  return changed ? store : undefined;
 });
 
 const queryClient = new QueryClient({
@@ -42,15 +37,13 @@ const button = cx(
   "flex h-[1.68em] min-w-[1.4em] shrink-0 cursor-default items-center justify-center rounded-6 bg-faded px-[0.38em] text-11 font-medium focus-visible:outline-none",
 );
 
-const buttonCheckbox = cx("scale-[0.82]");
-
 function Popup() {
-  const [hideProfiles, setHideProfiles] = React.useState(false);
-  const hrefStoreQuery = useHrefStoreQuery();
-  const profileUrlSchemeQuery = useProfileUrlSchemeQuery();
-  const hideProfilesOnClickQuery = useHideProfilesOnClickQuery();
+  const feedStoreQuery = useFeedStoreQuery();
+  const credentialsQuery = useCredentialsQuery();
+  const showCommentFeedsQuery = useShowCommentFeedsQuery();
   const popoverCloseRef = React.useRef<HTMLButtonElement>(null);
-  const profileUrlSchemeInputRef = React.useRef<HTMLInputElement>(null);
+
+  const isLoggedIn = !!credentialsQuery.data?.value;
 
   return (
     <div className="relative flex h-[600px] w-[350px] flex-col overflow-auto bg-primaryBg">
@@ -58,344 +51,451 @@ function Popup() {
         <img src="/icon-128.png" width="36" height="36" />
 
         <h1 className="text-14 font-medium leading-[1.21] text-primaryText">
-          StreetPass
+          FeedPass
         </h1>
       </div>
 
-      <div className="flex grow flex-col gap-[18px] px-12 py-[18px]">
-        <Profiles
-          hideProfiles={hideProfiles}
-          profiles={hrefStoreQuery.data?.profiles}
-        />
+      {!isLoggedIn ? (
+        <LoginForm />
+      ) : (
+        <>
+          <div className="flex grow flex-col gap-[12px] px-12 py-[18px]">
+            {feedStoreQuery.data && (
+              <>
+                {feedStoreQuery.data.newFeeds.length > 0 && (
+                  <FeedSection
+                    title="New Feeds"
+                    feeds={feedStoreQuery.data.newFeeds}
+                    variant="new"
+                  />
+                )}
 
-        {!!hrefStoreQuery.data?.hiddenProfiles.length && (
-          <details
-            className="peer mt-auto"
-            tabIndex={
-              /* Safari autofocuses this element when the popup opens */
-              -1
-            }
-          >
-            <summary
-              tabIndex={
-                /* Safari autofocuses this element when the popup opens */
-                -1
-              }
-              className="text-13 text-secondaryText"
-            >
-              Hidden
-            </summary>
+                {feedStoreQuery.data.seenFeeds.length > 0 && (
+                  <FeedSection
+                    title="Previously Seen"
+                    feeds={feedStoreQuery.data.seenFeeds}
+                    variant="seen"
+                  />
+                )}
 
-            <div className="flex flex-col gap-[18px] pt-[18px]">
-              <Profiles
-                hideProfiles={hideProfiles}
-                profiles={hrefStoreQuery.data?.hiddenProfiles}
-              />
-            </div>
-          </details>
-        )}
+                {feedStoreQuery.data.subscribedFeeds.length > 0 && (
+                  <FeedSection
+                    title="Subscribed"
+                    feeds={feedStoreQuery.data.subscribedFeeds}
+                    variant="subscribed"
+                  />
+                )}
+              </>
+            )}
 
-        {hrefStoreQuery.data?.profiles.length === 0 && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center peer-open:hidden">
-            <p className="pointer-events-auto text-13 text-secondaryText">
-              No profiles
-              {hrefStoreQuery.data.hiddenProfiles.length === 0 && (
-                <>
-                  . Try{" "}
-                  <a
-                    {...getHrefProps("https://streetpass.social")}
-                    className="font-medium text-accent"
-                  >
-                    this
-                  </a>
-                  !
-                </>
+            {feedStoreQuery.data &&
+              feedStoreQuery.data.newFeeds.length === 0 &&
+              feedStoreQuery.data.seenFeeds.length === 0 &&
+              feedStoreQuery.data.subscribedFeeds.length === 0 && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <p className="pointer-events-auto text-13 text-secondaryText">
+                    No feeds discovered yet. Browse the web!
+                  </p>
+                </div>
               )}
-            </p>
           </div>
-        )}
-      </div>
 
-      <div
-        className="absolute right-12 top-12 flex gap-8"
-        hidden={!hideProfiles}
-      >
-        <form
-          id={hideProfilesFormId}
-          className="contents"
-          onSubmit={async (ev) => {
-            ev.preventDefault();
-            const formData = new FormData(ev.currentTarget);
+          <div className="absolute right-12 top-12 flex gap-8">
+            {feedStoreQuery.data &&
+              feedStoreQuery.data.newFeeds.length +
+                feedStoreQuery.data.seenFeeds.length +
+                feedStoreQuery.data.subscribedFeeds.length >
+                0 && (
+                <span className={cx(button, "text-accent")}>
+                  {feedStoreQuery.data.newFeeds.length +
+                    feedStoreQuery.data.seenFeeds.length +
+                    feedStoreQuery.data.subscribedFeeds.length}
+                </span>
+              )}
 
-            await getHrefStore((prev) => {
-              const hrefStore = new Map(prev);
+            <Popover.Root modal>
+              <Popover.Close hidden ref={popoverCloseRef} />
 
-              for (const [key, hrefData] of hrefStore) {
-                const hidden = formData.get(key) === "on";
-                hrefStore.set(key, {
-                  ...hrefData,
-                  hidden: hidden,
-                });
-              }
-
-              return hrefStore;
-            });
-
-            setHideProfiles((prev) => !prev);
-            queryClient.refetchQueries();
-          }}
-        >
-          <button
-            type="button"
-            className={cx(button, "text-secondaryText")}
-            onClick={(ev) => {
-              const formElements = ev.currentTarget.form?.elements;
-              if (!formElements) {
-                return;
-              }
-
-              for (const formElement of formElements) {
-                if (formElement instanceof HTMLInputElement) {
-                  formElement.checked = true;
-                }
-              }
-            }}
-          >
-            Hide All
-          </button>
-
-          <button className={cx(button, "text-accent")}>Save</button>
-        </form>
-      </div>
-
-      <div
-        className="absolute right-12 top-12 flex gap-8"
-        hidden={hideProfiles}
-      >
-        {!!hrefStoreQuery.data?.profiles.length && (
-          <span className={cx(button, "text-accent")}>
-            {hrefStoreQuery.data?.profiles.length}
-          </span>
-        )}
-
-        <Popover.Root modal>
-          <Popover.Close hidden ref={popoverCloseRef} />
-
-          <Popover.Trigger className={cx(button, "text-accent")}>
-            <svg
-              fill="currentColor"
-              className="size-[1em]"
-              viewBox="0 0 100 100"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <circle cx="15" cy="50" r="9" />
-              <circle cx="50" cy="50" r="9" />
-              <circle cx="85" cy="50" r="9" />
-            </svg>
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Content
-              align="end"
-              side="bottom"
-              sideOffset={6}
-              avoidCollisions={false}
-              className="flex rounded-6 border border-primaryBorder bg-primaryBg"
-              onOpenAutoFocus={(ev) => {
-                ev.preventDefault();
-              }}
-              onCloseAutoFocus={(ev) => {
-                ev.preventDefault();
-              }}
-            >
-              <Tabs.Root defaultValue={PopupTab.root} className="contents">
-                <Tabs.Content
-                  value={PopupTab.root}
-                  className="flex flex-col items-start gap-y-8 p-8"
+              <Popover.Trigger className={cx(button, "text-accent")}>
+                <svg
+                  fill="currentColor"
+                  className="size-[1em]"
+                  viewBox="0 0 100 100"
+                  xmlns="http://www.w3.org/2000/svg"
                 >
-                  <Tabs.List className="contents">
-                    <Tabs.Trigger
-                      value={PopupTab.openProfilesWith}
+                  <circle cx="15" cy="50" r="9" />
+                  <circle cx="50" cy="50" r="9" />
+                  <circle cx="85" cy="50" r="9" />
+                </svg>
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content
+                  align="end"
+                  side="bottom"
+                  sideOffset={6}
+                  avoidCollisions={false}
+                  className="flex rounded-6 border border-primaryBorder bg-primaryBg"
+                  onOpenAutoFocus={(ev) => ev.preventDefault()}
+                  onCloseAutoFocus={(ev) => ev.preventDefault()}
+                >
+                  <div className="flex flex-col items-start gap-y-8 p-8">
+                    <button
                       className={cx(button, "text-accent")}
-                    >
-                      Open Profiles With…
-                    </Tabs.Trigger>
-                  </Tabs.List>
-
-                  <Popover.Close
-                    className={cx(button, "text-accent")}
-                    onClick={() => {
-                      setHideProfiles((prev) => !prev);
-                    }}
-                  >
-                    Hide Profiles…
-                  </Popover.Close>
-
-                  <label className={cx(button, "text-accent")}>
-                    Hide Profiles On Click&nbsp;
-                    <input
-                      type="checkbox"
-                      defaultChecked={hideProfilesOnClickQuery.data}
-                      className={buttonCheckbox}
-                      onChange={async (ev) => {
-                        await getHideProfilesOnClick(() => ev.target.checked);
+                      onClick={async () => {
+                        popoverCloseRef.current?.click();
+                        const message: Message = {
+                          name: "SYNC_SUBSCRIPTIONS",
+                          args: {},
+                        };
+                        await browser.runtime.sendMessage(message);
                         queryClient.refetchQueries();
                       }}
-                    />
-                  </label>
+                    >
+                      Refresh Subscriptions
+                    </button>
 
-                  <Popover.Close
-                    onClick={exportProfiles}
-                    className={cx(button, "text-accent")}
-                  >
-                    Export (.json)
-                  </Popover.Close>
-
-                  <ConfirmButton
-                    className={cx(
-                      button,
-                      "text-accent data-[confirm]:text-[--red-10]",
-                    )}
-                    onClick={async () => {
-                      popoverCloseRef.current?.click();
-                      await getHrefStore(() => {
-                        return new Map();
-                      });
-                      queryClient.refetchQueries();
-                    }}
-                    confirmJsx=" (Confirm)"
-                  >
-                    Reset
-                  </ConfirmButton>
-
-                  <a
-                    className={cx(button, "text-accent")}
-                    {...getHrefProps(downloadLink[__TARGET__])}
-                  >
-                    Rate StreetPass
-                  </a>
-                </Tabs.Content>
-
-                <Tabs.Content
-                  value={PopupTab.openProfilesWith}
-                  className="flex w-[275px] flex-col gap-y-8 pt-8"
-                >
-                  <form
-                    className="contents"
-                    onSubmit={async (ev) => {
-                      ev.preventDefault();
-                      await getProfileUrlScheme(
-                        () => profileUrlSchemeInputRef.current?.value.trim(),
-                      );
-                      queryClient.refetchQueries();
-                      popoverCloseRef.current?.click();
-                    }}
-                  >
-                    <label className="contents">
-                      <span className="px-8 text-12 text-secondaryText">
-                        URL to open profiles with. Set as empty for default
-                        behavior.
-                      </span>
-
+                    <label className={cx(button, "text-accent")}>
+                      Show Comment Feeds&nbsp;
                       <input
-                        spellCheck={false}
-                        type="text"
-                        placeholder="https://mastodon.example/@{account}"
-                        className="mx-8 rounded-6 border border-primaryBorder bg-secondaryBg px-6 py-2 text-12 text-primaryText placeholder:text-[--gray-a10]"
-                        ref={profileUrlSchemeInputRef}
-                        defaultValue={profileUrlSchemeQuery.data}
-                        key={profileUrlSchemeQuery.data}
+                        type="checkbox"
+                        defaultChecked={showCommentFeedsQuery.data}
+                        className="scale-[0.82]"
+                        onChange={async (ev) => {
+                          await getShowCommentFeeds(() => ev.target.checked);
+                          queryClient.refetchQueries();
+                        }}
                       />
                     </label>
 
-                    <span className="px-8 text-12 text-secondaryText">
-                      …or select a preset:
-                    </span>
+                    <button
+                      className={cx(button, "text-accent")}
+                      onClick={async () => {
+                        popoverCloseRef.current?.click();
+                        await getCredentials(() => ({ value: null }));
+                        await getSubscriptions(() => []);
+                        queryClient.refetchQueries();
+                      }}
+                    >
+                      Sign Out
+                    </button>
 
-                    <div className="flex flex-wrap gap-8 px-8">
-                      {(
-                        [
-                          "elk",
-                          "icecubes",
-                          "ivory",
-                          "mastodon.online",
-                          "mastodon.social",
-                          "mona",
-                          "phanpy",
-                        ] as const
-                      ).map((item) => {
-                        return (
-                          <React.Fragment key={item}>
-                            <button
-                              type="button"
-                              className={cx(button, "text-accent")}
-                              onClick={() => {
-                                if (!profileUrlSchemeInputRef.current) {
-                                  return;
-                                }
+                    <ConfirmButton
+                      className={cx(
+                        button,
+                        "text-accent data-[confirm]:text-[--red-10]",
+                      )}
+                      onClick={async () => {
+                        popoverCloseRef.current?.click();
+                        await getFeedStore(() => new Map());
+                        queryClient.refetchQueries();
+                      }}
+                      confirmJsx=" (Confirm)"
+                    >
+                      Clear History
+                    </ConfirmButton>
+                  </div>
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
-                                profileUrlSchemeInputRef.current.value = {
-                                  /**
-                                   * https://tapbots.com/support/ivory/tips/urlschemes
-                                   */
-                                  ivory: "ivory://acct/user_profile/{account}",
-                                  elk: "https://elk.zone/@{account}",
-                                  icecubes:
-                                    "icecubesapp:{profileUrl.noProtocol}",
-                                  "mastodon.social":
-                                    "https://mastodon.social/@{account}",
-                                  "mastodon.online":
-                                    "https://mastodon.online/@{account}",
-                                  mona: "mona:{profileUrl.noProtocol}",
-                                  phanpy: `https://phanpy.social/#/https:{profileUrl.noProtocol}`,
-                                }[item];
+function LoginForm() {
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
 
-                                profileUrlSchemeInputRef.current.focus();
-                              }}
-                            >
-                              {
-                                {
-                                  ivory: "Ivory",
-                                  elk: "Elk",
-                                  icecubes: "Ice Cubes",
-                                  "mastodon.social": "mastodon.social",
-                                  "mastodon.online": "mastodon.online",
-                                  mona: "Mona",
-                                  phanpy: "Phanpy",
-                                }[item]
-                              }
-                            </button>
-                          </React.Fragment>
-                        );
-                      })}
-                    </div>
+  return (
+    <form
+      className="flex grow flex-col gap-[12px] px-12 py-[12px]"
+      onSubmit={async (ev) => {
+        ev.preventDefault();
+        setError("");
+        setLoading(true);
 
-                    <div className="flex justify-end gap-x-8 border-t border-primaryBorder px-8 py-8">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!profileUrlSchemeInputRef.current) {
-                            return;
-                          }
+        try {
+          const creds = { email: email.trim(), password };
+          const ok = await authenticate(creds);
 
-                          profileUrlSchemeInputRef.current.value = "";
-                          profileUrlSchemeInputRef.current.focus();
-                        }}
-                        className={cx(button, "text-secondaryText")}
-                      >
-                        Clear
-                      </button>
+          if (!ok) {
+            setError("Invalid email or password.");
+            setLoading(false);
+            return;
+          }
 
-                      <button className={cx(button, "text-accent")}>
-                        Save
-                      </button>
-                    </div>
-                  </form>
-                </Tabs.Content>
-              </Tabs.Root>
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
+          await getCredentials(() => ({ value: creds }));
+
+          const message: Message = {
+            name: "SYNC_SUBSCRIPTIONS",
+            args: {},
+          };
+          await browser.runtime.sendMessage(message);
+
+          queryClient.refetchQueries();
+        } catch {
+          setError("Could not connect to Feedbin.");
+        } finally {
+          setLoading(false);
+        }
+      }}
+    >
+      <p className="text-13 text-secondaryText">Log into Feedbin</p>
+
+      <label className="flex flex-col gap-2">
+        <span className="text-12 text-secondaryText">Email</span>
+        <input
+          type="email"
+          required
+          autoFocus
+          value={email}
+          onChange={(ev) => setEmail(ev.target.value)}
+          className="rounded-6 border border-primaryBorder bg-secondaryBg px-6 py-2 text-12 text-primaryText placeholder:text-[--gray-a10]"
+          placeholder="you@example.com"
+        />
+      </label>
+
+      <label className="flex flex-col gap-2">
+        <span className="text-12 text-secondaryText">Password</span>
+        <input
+          type="password"
+          required
+          value={password}
+          onChange={(ev) => setPassword(ev.target.value)}
+          className="rounded-6 border border-primaryBorder bg-secondaryBg px-6 py-2 text-12 text-primaryText placeholder:text-[--gray-a10]"
+        />
+      </label>
+
+      {error && <p className="text-12 text-[--red-10]">{error}</p>}
+
+      <button
+        type="submit"
+        disabled={loading}
+        className={cx(
+          button,
+          "self-start text-accent",
+          loading && "opacity-50",
+        )}
+      >
+        {loading ? "Signing in…" : "Sign In"}
+      </button>
+
+      <p className="mt-auto text-11 text-secondaryText">
+        Credentials stored locally, sent only to api.feedbin.com
+      </p>
+    </form>
+  );
+}
+
+const feedTypePillColors: Record<FeedType, string> = {
+  rss: "bg-[--orange-a3] text-[--orange-11]",
+  atom: "bg-[--blue-a3] text-[--blue-11]",
+  json: "bg-[--green-a3] text-[--green-11]",
+};
+
+function FeedTypePill({ type }: { type: FeedType }) {
+  return (
+    <span
+      className={cx(
+        "inline-flex shrink-0 items-center rounded-6 px-[0.38em] text-11 font-medium uppercase",
+        feedTypePillColors[type],
+      )}
+    >
+      {type}
+    </span>
+  );
+}
+
+function FeedSection({
+  title,
+  feeds,
+  variant,
+}: {
+  title: string;
+  feeds: FeedInfo[];
+  variant: "new" | "seen" | "subscribed";
+}) {
+  return (
+    <div className="flex flex-col gap-[8px]">
+      <p
+        className={cx(
+          "text-13",
+          variant === "new" ? "font-medium text-primaryText" : "text-secondaryText",
+        )}
+      >
+        {title}
+      </p>
+
+      {feeds.map((feed) => (
+        <FeedRow key={feed.feedUrl} feed={feed} variant={variant} />
+      ))}
+    </div>
+  );
+}
+
+function CopyFeedUrlButton({ feedUrl }: { feedUrl: string }) {
+  const [copied, setCopied] = React.useState(false);
+
+  return (
+    <Popover.Root>
+      <Popover.Trigger
+        className="inline-flex shrink-0 items-center text-secondaryText opacity-60 hover:opacity-100"
+        title="Feed URL"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          fill="none"
+          className="size-[11px]"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M6.5 8.5a3 3 0 0 0 4.2.4l2-2a3 3 0 0 0-4.2-4.2l-1.1 1.1" />
+          <path d="M9.5 7.5a3 3 0 0 0-4.2-.4l-2 2a3 3 0 0 0 4.2 4.2l1.1-1.1" />
+        </svg>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          side="bottom"
+          align="start"
+          sideOffset={4}
+          className="flex max-w-[320px] items-center gap-6 rounded-6 border border-primaryBorder bg-primaryBg p-6"
+          onOpenAutoFocus={(ev) => ev.preventDefault()}
+        >
+          <span className="min-w-0 break-all text-11 text-secondaryText">
+            {getDisplayFeedUrl(feedUrl)}
+          </span>
+          <button
+            className={cx(
+              "flex shrink-0 items-center justify-center rounded-6 bg-faded px-[0.38em] py-[0.15em] text-11 font-medium",
+              copied ? "text-[--green-11]" : "text-accent",
+            )}
+            onClick={async () => {
+              await navigator.clipboard.writeText(feedUrl);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <a
+            {...getHrefProps(feedUrl)}
+            className="flex shrink-0 items-center justify-center rounded-6 bg-faded px-[0.38em] py-[0.15em] text-11 font-medium text-accent"
+          >
+            Open
+          </a>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function FeedRow({
+  feed,
+  variant,
+}: {
+  feed: FeedInfo;
+  variant: "new" | "seen" | "subscribed";
+}) {
+  const [subscribing, setSubscribing] = React.useState(false);
+  const [subscribeResult, setSubscribeResult] = React.useState<
+    "created" | "already_subscribed" | "error" | null
+  >(null);
+
+  const isSubscribed = variant === "subscribed" || subscribeResult === "created" || subscribeResult === "already_subscribed";
+
+  return (
+    <div className="flex items-start gap-6">
+      <div className="flex min-w-0 grow flex-col">
+        <div className="flex items-center gap-6 leading-[1.45]">
+          <FeedTypePill type={feed.feedType} />
+          <span
+            className={cx(
+              "overflow-hidden text-ellipsis whitespace-nowrap text-[13px]",
+              variant === "new"
+                ? "font-medium text-primaryText"
+                : "text-secondaryText",
+            )}
+            title={feed.feedTitle}
+          >
+            {feed.feedTitle}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-6">
+          <a
+            {...getHrefProps(feed.siteUrl)}
+            className="min-w-0 break-all text-[12.5px] leading-[1.5] text-secondaryText"
+          >
+            {getDisplayHref(feed.siteUrl)}
+          </a>
+          <CopyFeedUrlButton feedUrl={feed.feedUrl} />
+        </div>
       </div>
+
+      {isSubscribed ? (
+        <span className="flex size-[1.68em] shrink-0 items-center justify-center text-[--green-11]">
+          <svg
+            viewBox="0 0 16 16"
+            fill="none"
+            className="size-[12px]"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M2 8.5L6 12.5L14 3.5" />
+          </svg>
+        </span>
+      ) : (
+        <button
+          className={cx(
+            button,
+            "text-accent",
+            subscribing && "opacity-50",
+            subscribeResult === "error" && "text-[--red-10]",
+          )}
+          disabled={subscribing}
+          onClick={async () => {
+            setSubscribing(true);
+            setSubscribeResult(null);
+
+            try {
+              const message: Message = {
+                name: "SUBSCRIBE_FEED",
+                args: { feedUrl: feed.feedUrl },
+              };
+              const resp = await browser.runtime.sendMessage(message);
+
+              if (resp && typeof resp === "object" && "status" in resp) {
+                setSubscribeResult(resp.status);
+                if (resp.status === "created" || resp.status === "already_subscribed") {
+                  queryClient.refetchQueries();
+                }
+              } else {
+                setSubscribeResult("error");
+              }
+            } catch {
+              setSubscribeResult("error");
+            } finally {
+              setSubscribing(false);
+            }
+          }}
+        >
+          {subscribing ? (
+            <span className="animate-pulse">…</span>
+          ) : subscribeResult === "error" ? (
+            "!"
+          ) : (
+            "+"
+          )}
+        </button>
+      )}
     </div>
   );
 }
@@ -427,187 +527,6 @@ function ConfirmButton(
     </button>
   );
 }
-
-function Profiles(props: {
-  profiles: Array<HrefDataType<"profile">> | undefined;
-  hideProfiles: boolean;
-}) {
-  return props.profiles?.map((hrefData, index, arr) => {
-    const prevHrefData = arr[index - 1];
-    const prevHrefDate = prevHrefData
-      ? new Date(prevHrefData.viewedAt).getDate()
-      : new Date().getDate();
-    const previousItemWasDayBefore =
-      prevHrefDate !== new Date(hrefData.viewedAt).getDate();
-    const profileHrefProps = getHrefProps(
-      hrefData.profileData.profileUrl,
-      async () => {
-        const [profileUrlScheme, hideProfilesOnClick] = await Promise.all([
-          queryClient.fetchQuery(useProfileUrlSchemeQuery.getFetchOptions()),
-          queryClient.fetchQuery(useHideProfilesOnClickQuery.getFetchOptions()),
-        ]);
-
-        if (hideProfilesOnClick) {
-          await getHrefStore((prev) =>
-            new Map(prev).set(hrefData.relMeHref, {
-              ...hrefData,
-              hidden: true,
-            }),
-          );
-
-          queryClient.refetchQueries();
-        }
-
-        return getProfileUrl(hrefData.profileData, profileUrlScheme);
-      },
-    );
-    const profileDisplayName = hrefData.profileData.account
-      ? `@${hrefData.profileData.account}`
-      : getDisplayHref(hrefData.profileData.profileUrl);
-
-    return (
-      <React.Fragment key={`${index}.${hrefData.relMeHref}`}>
-        {previousItemWasDayBefore && (
-          <p className="shrink-0 text-13 text-secondaryText">
-            {new Intl.DateTimeFormat(undefined, {
-              day: "numeric",
-              month: "short",
-            }).format(hrefData.viewedAt)}
-          </p>
-        )}
-
-        <InView
-          as="div"
-          className="flex items-start"
-          triggerOnce
-          onChange={async (inView) => {
-            if (!inView) {
-              return;
-            }
-
-            try {
-              const message: Message = {
-                name: "FETCH_PROFILE_UPDATE",
-                args: {
-                  relMeHref: hrefData.relMeHref,
-                },
-              };
-              const resp = await MessageReturn.FETCH_PROFILE_UPDATE.parse(
-                browser.runtime.sendMessage(message),
-              );
-              if (!resp) {
-                return;
-              }
-
-              queryClient.refetchQueries();
-            } catch (err) {
-              console.error(err);
-            }
-          }}
-        >
-          <a
-            {...profileHrefProps}
-            className="flex shrink-0 pr-[7px] pt-[4px]"
-            title={profileDisplayName}
-          >
-            <div className="relative flex size-[19px] shrink-0 overflow-hidden rounded-full">
-              {hrefData.profileData.avatar ? (
-                <>
-                  <img
-                    src={hrefData.profileData.avatar}
-                    width={19}
-                    height={19}
-                    className="object-cover"
-                    loading="lazy"
-                    decoding="async"
-                  />
-
-                  <div className="pointer-events-none absolute inset-0 rounded-[inherit] border border-primaryText opacity-[0.14]" />
-                </>
-              ) : (
-                <div className="flex w-full items-center justify-center bg-faded text-accent">
-                  <svg
-                    viewBox="0 0 40 37"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="w-[12px]"
-                  >
-                    {nullIconJsx}
-                  </svg>
-                </div>
-              )}
-            </div>
-          </a>
-          <div className="flex min-w-0 grow flex-col">
-            <div className="flex items-baseline justify-between gap-x-6 leading-[1.45]">
-              <a
-                {...profileHrefProps}
-                className="overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-medium text-accent"
-                title={profileDisplayName}
-              >
-                {profileDisplayName}
-              </a>
-
-              {!props.hideProfiles && (
-                <span className="shrink-0 text-[12px] text-secondaryText">
-                  {new Intl.DateTimeFormat(undefined, {
-                    timeStyle: "short",
-                  })
-                    .format(hrefData.viewedAt)
-                    .toLowerCase()
-                    .replace(/\s+/g, "")}
-                </span>
-              )}
-            </div>
-
-            <a
-              {...getHrefProps(hrefData.websiteUrl)}
-              className="self-start break-all text-[12.5px] leading-[1.5] text-secondaryText"
-            >
-              {getDisplayHref(hrefData.websiteUrl)}
-            </a>
-          </div>
-
-          {props.hideProfiles && (
-            <label className={cx(button, "ml-8 text-accent")}>
-              Hide&nbsp;
-              <input
-                name={hrefData.relMeHref}
-                form={hideProfilesFormId}
-                type="checkbox"
-                defaultChecked={hrefData.hidden}
-                className={buttonCheckbox}
-              />
-            </label>
-          )}
-        </InView>
-      </React.Fragment>
-    );
-  });
-}
-
-const nullIconJsx = (
-  <>
-    <rect
-      x="2"
-      y="2"
-      width="36"
-      height="33"
-      rx="3"
-      stroke="currentColor"
-      strokeWidth="4"
-    />
-    <rect x="12" y="10" width="4" height="8" rx="2" fill="currentColor" />
-    <rect x="24" y="10" width="4" height="8" rx="2" fill="currentColor" />
-    <path
-      d="M13 24.5V24.5C16.7854 28.5558 23.2146 28.5558 27 24.5V24.5"
-      stroke="currentColor"
-      strokeWidth="4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </>
-);
 
 const rootNode = document.getElementById("root");
 if (!rootNode) {

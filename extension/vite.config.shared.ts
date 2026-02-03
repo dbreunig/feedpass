@@ -31,7 +31,7 @@ export function getConfig(
     return args[target];
   }
 
-  const extensionName = `StreetPass for Mastodon${
+  const extensionName = `FeedPass${
     config.mode === "dev"
       ? ` ${new Intl.DateTimeFormat(undefined, {
           month: "short",
@@ -55,9 +55,24 @@ export function getConfig(
             manifest_version: targets({ chrome: 3, firefox: 2, safari: 3 }),
             name: extensionName,
             version: VERSION,
-            description: "Find your people on Mastodon",
-            homepage_url: "https://streetpass.social/",
-            permissions: ["storage"],
+            description: "Discover RSS feeds as you browse. Subscribe with Feedbin.",
+            homepage_url: "https://feedpass.social/",
+            permissions: targets({
+              chrome: ["storage"],
+              firefox: ["storage", "https://api.feedbin.com/*"],
+              safari: ["storage"],
+            }),
+            ...targets<
+              Pick<Manifest.WebExtensionManifest, "host_permissions"> | {}
+            >({
+              chrome: {
+                host_permissions: ["https://api.feedbin.com/*"],
+              },
+              firefox: {},
+              safari: {
+                host_permissions: ["https://api.feedbin.com/*"],
+              },
+            }),
             content_scripts: [
               {
                 matches: ["https://*/*", "http://*/*"],
@@ -81,7 +96,7 @@ export function getConfig(
             ...(() => {
               const action: Manifest.ActionManifest = {
                 default_popup: "src/popup.html",
-                default_title: "StreetPass",
+                default_title: "FeedPass",
                 default_icon: targets<Record<string, string>>({
                   chrome: actionInactive,
                   firefox: actionInactive,
@@ -119,7 +134,7 @@ export function getConfig(
           if (target === "firefox") {
             manifest.browser_specific_settings = {
               gecko: {
-                id: "streetpass@streetpass.social",
+                id: "feedpass@feedpass.social",
               },
             };
           }

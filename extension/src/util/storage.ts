@@ -1,12 +1,13 @@
 import type { DeepReadonly } from "ts-essentials";
 import {
-  HrefStore,
+  FeedStore,
+  FeedbinCredentials,
+  FeedbinSubscription,
   MaybePromise,
   NotNullNotUndefined,
   actionActive,
   actionInactive,
 } from "./constants";
-import { getProfiles } from "./getProfiles";
 
 function storageFactory<T extends NotNullNotUndefined>(args: {
   parse(storageData: any): DeepReadonly<T>;
@@ -61,7 +62,7 @@ function storageFactory<T extends NotNullNotUndefined>(args: {
 }
 
 export const getIconState = storageFactory({
-  storageKey: "icon-state-3",
+  storageKey: "feedpass-icon-state-1",
   parse(storageData) {
     const iconState: { state: "on" | "off"; unreadCount?: number | undefined } =
       storageData ?? { state: "off" };
@@ -71,21 +72,12 @@ export const getIconState = storageFactory({
     return iconState;
   },
   onChange({ prev, curr }) {
-    /**
-     * Firefox is still at manifest v2
-     */
     const browserAction =
       __TARGET__ === "firefox" ? browser.browserAction : browser.action;
 
-    /**
-     * Safari can't render grayed out icon
-     */
     if (__TARGET__ !== "safari") {
       const path = curr.state === "off" ? actionInactive : actionActive;
-
-      browserAction.setIcon({
-        path: path,
-      });
+      browserAction.setIcon({ path });
     }
 
     browserAction.setBadgeBackgroundColor({ color: "#9f99f5" });
@@ -95,64 +87,63 @@ export const getIconState = storageFactory({
   },
 });
 
-export const getHrefStore = storageFactory({
-  storageKey: "rel-me-href-data-store-3",
+export const getFeedStore = storageFactory({
+  storageKey: "feedpass-feed-store-1",
   parse(storageData) {
-    let hrefStore: HrefStore;
+    let feedStore: FeedStore;
     try {
-      hrefStore = new Map(storageData);
-    } catch (err) {
-      hrefStore = new Map();
+      feedStore = new Map(storageData);
+    } catch {
+      feedStore = new Map();
     }
-    return hrefStore;
+    return feedStore;
   },
-  serialize(hrefStore) {
-    return Array.from(hrefStore.entries());
+  serialize(feedStore) {
+    return Array.from(feedStore.entries());
   },
   async onChange({ prev, curr }) {
-    const prevProfiles = getProfiles(prev);
-    const currProfiles = getProfiles(curr);
-    const profilesDiff = currProfiles.length - prevProfiles.length;
-    if (profilesDiff <= 0) {
-      return;
+    let prevUnseen = 0;
+    for (const feed of prev.values()) {
+      if (!feed.seen) prevUnseen++;
     }
 
-    {
-      const prevHiddenProfiles = getProfiles(prev, { hidden: true });
-      const currHiddenProfiles = getProfiles(curr, { hidden: true });
-      const hiddenProfilesDiff =
-        prevHiddenProfiles.length - currHiddenProfiles.length;
+    let currUnseen = 0;
+    for (const feed of curr.values()) {
+      if (!feed.seen) currUnseen++;
+    }
 
-      /**
-       * Early exit if we are just moving profiles from hidden to non hidden.
-       * This can def be figured out in a better way by figuring out the exact
-       * profiles that were added. This is just easier and prob won't break
-       * anything.
-       */
-      if (hiddenProfilesDiff === profilesDiff) {
-        return;
-      }
+    const newUnseenCount = currUnseen - prevUnseen;
+    if (newUnseenCount <= 0) {
+      return;
     }
 
     getIconState((iconState) => ({
       state: "on",
-      unreadCount: (iconState.unreadCount ?? 0) + profilesDiff,
+      unreadCount: (iconState.unreadCount ?? 0) + newUnseenCount,
     }));
   },
 });
 
-export const getProfileUrlScheme = storageFactory({
-  storageKey: "profile-url-scheme-1",
-  parse(storageData: string) {
-    return storageData ?? "";
+export const getCredentials = storageFactory({
+  storageKey: "feedpass-credentials-1",
+  parse(storageData): { value: FeedbinCredentials | null } {
+    if (
+      storageData &&
+      typeof storageData === "object" &&
+      typeof storageData.email === "string" &&
+      typeof storageData.password === "string"
+    ) {
+      return { value: storageData as FeedbinCredentials };
+    }
+    return { value: null };
   },
   serialize(data) {
-    return data ?? "";
+    return data.value;
   },
 });
 
-export const getHideProfilesOnClick = storageFactory({
-  storageKey: "hide-profiles-on-click-1",
+export const getShowCommentFeeds = storageFactory({
+  storageKey: "feedpass-show-comment-feeds-1",
   parse(storageData: boolean) {
     return storageData ?? false;
   },
@@ -161,72 +152,15 @@ export const getHideProfilesOnClick = storageFactory({
   },
 });
 
-/**
- * Test the safe storage
- */
-// {
-//   const getInc = storageFactory({
-//     storageKey: "inc2",
-//     parse(storageData) {
-//       let num: number;
-//       if (typeof storageData === "number" && !isNaN(storageData)) {
-//         num = storageData;
-//       } else {
-//         num = 0;
-//       }
-//       return num;
-//     },
-//     serialize(inc) {
-//       return inc;
-//     },
-//   });
-
-//   chrome.runtime.onMessage.addListener(async () => {
-//     /**
-//      * @param {number} sleepMs
-//      * @returns {Promise<void>}
-//      */
-//     function sleep(sleepMs) {
-//       return new Promise((res) => {
-//         setTimeout(() => {
-//           res();
-//         }, sleepMs);
-//       });
-//     }
-
-//     getInc((inc) => {
-//       console.log(inc, inc === 0);
-//       return inc + 1;
-//     });
-//     getInc((inc) => {
-//       console.log(inc, inc === 1);
-//       return inc + 1;
-//     });
-//     await getInc((inc) => {
-//       console.log(inc, inc === 2);
-//       return inc + 1;
-//     });
-//     getInc((inc) => {
-//       console.log(inc, inc === 3);
-//       return inc + 1;
-//     });
-//     console.log("sleep");
-//     await sleep(1000);
-//     console.log("wakeup");
-//     getInc((inc) => {
-//       console.log(inc, inc === 4);
-//       return inc + 1;
-//     });
-//     getInc((inc) => {
-//       console.log(inc, inc === 5);
-//       return inc + 1;
-//     });
-//     await getInc((inc) => {
-//       console.log(inc, inc === 6);
-//       return inc + 1;
-//     });
-//     getInc((inc) => {
-//       console.log(inc, inc === 7);
-//     });
-//   });
-// }
+export const getSubscriptions = storageFactory({
+  storageKey: "feedpass-subscriptions-1",
+  parse(storageData): FeedbinSubscription[] {
+    if (Array.isArray(storageData)) {
+      return storageData;
+    }
+    return [];
+  },
+  serialize(data) {
+    return data;
+  },
+});

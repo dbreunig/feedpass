@@ -1,13 +1,7 @@
 import { z } from "zod";
-import {
-  Message,
-  MessageReturn,
-  Profile,
-  timeToExpireNotProfile,
-  timeToUpdateProfile,
-} from "./constants";
-import { getUncachedProfileData } from "./getUncachedProfileData";
-import { getHrefStore } from "./storage";
+import { Message, MessageReturn } from "./constants";
+import * as feedbinApi from "./feedbinApi";
+import { getFeedStore, getCredentials, getSubscriptions } from "./storage";
 
 type ArgMap = {
   [Key in Message["name"]]: Extract<Message, { name: Key }>["args"];
@@ -16,111 +10,94 @@ type ArgMap = {
 export const messageCallbacks: {
   [K in keyof ArgMap]: (value: ArgMap[K]) => z.infer<(typeof MessageReturn)[K]>;
 } = {
-  async HREF_PAYLOAD(args) {
-    const hasExistingHrefData = (
-      await getHrefStore((prev) => {
-        const hrefStore = new Map(prev);
-        for (const [key, hrefData] of hrefStore) {
-          if (
-            hrefData.profileData.type === "notProfile" &&
-            hrefData.viewedAt + timeToExpireNotProfile < Date.now()
-          ) {
-            hrefStore.delete(key);
-          }
-        }
+  async FEED_DISCOVERED(args) {
+    const feedStore = await getFeedStore();
 
-        return hrefStore;
-      })
-    ).has(args.relMeHref);
-
-    if (hasExistingHrefData) {
+    if (feedStore.has(args.feedUrl)) {
       return;
     }
 
-    const profileData = await getUncachedProfileData(args.relMeHref);
+    const subscriptions = await getSubscriptions();
+    const isSubscribed = subscriptions.some(
+      (sub) => sub.feed_url === args.feedUrl,
+    );
 
-    await getHrefStore((hrefStore) => {
-      const newHrefStore = new Map(hrefStore);
-      newHrefStore.set(args.relMeHref, {
-        profileData: profileData,
-        viewedAt: Date.now(),
-        websiteUrl: args.tabUrl,
-        relMeHref: args.relMeHref,
+    await getFeedStore((prev) => {
+      const newStore = new Map(prev);
+      newStore.set(args.feedUrl, {
+        feedUrl: args.feedUrl,
+        feedTitle: args.feedTitle,
+        feedType: args.feedType,
+        siteUrl: args.siteUrl,
+        discoveredAt: Date.now(),
+        seen: isSubscribed,
       });
-
-      return newHrefStore;
+      return newStore;
     });
   },
-  /**
-   * Update a profile with uncached data. Returns true if updated.
-   * Will not add a new profile, only update an existing one.
-   */
-  async FETCH_PROFILE_UPDATE(args) {
-    // console.log("FETCH_PROFILE_UPDATE", args.relMeHref);
 
-    /**
-     * Exit if relMeHref isn't a valid url
-     */
-    try {
-      new URL(args.relMeHref);
-    } catch (err) {
-      return false;
+  async SUBSCRIBE_FEED(args) {
+    const creds = (await getCredentials()).value;
+    if (!creds) {
+      return { status: "error" as const, error: "Not logged in" };
     }
 
-    /**
-     * Exit if not already in hrefStore
-     */
-    const existingHrefData = (await getHrefStore()).get(args.relMeHref);
-    if (!existingHrefData) {
-      // console.log("not profile type");
-      return false;
-    }
+    const result = await feedbinApi.subscribe(creds, args.feedUrl);
 
-    /**
-     * Exit if has been updated recently
-     */
-    {
-      const lastDate = existingHrefData.updatedAt ?? existingHrefData.viewedAt;
-      if (lastDate + timeToUpdateProfile > Date.now()) {
-        // console.log("has been updated recently", args.relMeHref);
-        return false;
+    if (result.status === "created" || result.status === "already_subscribed") {
+      // Refresh subscriptions cache
+      try {
+        const subs = await feedbinApi.getSubscriptions(creds);
+        await getSubscriptions(() => subs);
+      } catch {
+        // Non-critical: cache refresh failed
       }
+
+      // Mark feed as seen
+      await getFeedStore((prev) => {
+        const store = new Map(prev);
+        const feed = store.get(args.feedUrl);
+        if (feed) {
+          store.set(args.feedUrl, { ...feed, seen: true });
+        }
+        return store;
+      });
     }
 
-    const uncachedProfileData = await getUncachedProfileData(args.relMeHref);
+    return result;
+  },
 
-    const shouldUpdateProfile =
-      uncachedProfileData.type === "profile" &&
-      Profile.keyof().options.some(
-        (key) =>
-          existingHrefData.profileData.type === "profile" &&
-          existingHrefData.profileData[key] !== uncachedProfileData[key],
-      );
+  async SYNC_SUBSCRIPTIONS() {
+    const creds = (await getCredentials()).value;
+    if (!creds) {
+      return;
+    }
 
-    await getHrefStore((hrefStore) => {
-      return new Map(hrefStore).set(args.relMeHref, {
-        ...existingHrefData,
-        updatedAt: Date.now(),
-        profileData: shouldUpdateProfile
-          ? uncachedProfileData
-          : existingHrefData.profileData,
+    try {
+      const subs = await feedbinApi.getSubscriptions(creds);
+      await getSubscriptions(() => subs);
+
+      const subUrls = new Set(subs.map((s) => s.feed_url));
+
+      await getFeedStore((prev) => {
+        let changed = false;
+        const store = new Map(prev);
+
+        for (const [key, feed] of store) {
+          if (!feed.seen && subUrls.has(feed.feedUrl)) {
+            store.set(key, { ...feed, seen: true });
+            changed = true;
+          }
+        }
+
+        return changed ? store : undefined;
       });
-    });
-
-    // console.log({
-    //   shouldUpdateProfile,
-    //   existingHrefData,
-    //   uncachedProfileData,
-    // });
-    return shouldUpdateProfile;
+    } catch {
+      // Sync failed silently
+    }
   },
 };
 
-/**
- * Thanks to https://stackoverflow.com/questions/70598583/argument-of-type-string-number-is-not-assignable-to-parameter-of-type-never
- * And https://github.com/Microsoft/TypeScript/issues/30581#issuecomment-1008338350
- * todo look at https://github.com/Microsoft/TypeScript/issues/30581#issuecomment-1080979994
- */
 export function runMessageCallback<K extends keyof ArgMap>(
   message: { [P in K]: { name: P; args: ArgMap[P] } }[K],
 ): z.infer<(typeof MessageReturn)[K]> {

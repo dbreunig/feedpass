@@ -2,71 +2,81 @@ import { z } from "zod";
 
 export type MaybePromise<T> = Promise<T> | T;
 
-export const Profile = z.object({
-  type: z.literal("profile"),
-  profileUrl: z.string(),
-  account: z.optional(z.union([z.string(), z.undefined()])),
-  avatar: z.optional(z.union([z.string(), z.undefined()])),
-});
+export type NotNullNotUndefined = {};
 
-export type Profile = z.infer<typeof Profile>;
+export type Target = "chrome" | "firefox" | "safari";
+
+export type FeedType = "rss" | "atom" | "json";
+
+export type FeedInfo = {
+  feedUrl: string;
+  feedTitle: string;
+  feedType: FeedType;
+  siteUrl: string;
+  discoveredAt: number;
+  seen: boolean;
+};
+
+export type FeedStore = Map<string, FeedInfo>;
+
+export type FeedbinCredentials = {
+  email: string;
+  password: string;
+};
+
+export type FeedbinSubscription = {
+  id: number;
+  feed_id: number;
+  title: string;
+  feed_url: string;
+  site_url: string;
+  created_at: string;
+};
 
 export const Message = z.discriminatedUnion("name", [
   z.object({
-    name: z.literal("HREF_PAYLOAD"),
+    name: z.literal("FEED_DISCOVERED"),
     args: z.object({
-      relMeHref: z.string(),
-      tabUrl: z.string(),
+      feedUrl: z.string(),
+      feedTitle: z.string(),
+      feedType: z.enum(["rss", "atom", "json"]),
+      siteUrl: z.string(),
     }),
   }),
   z.object({
-    name: z.literal("FETCH_PROFILE_UPDATE"),
+    name: z.literal("SUBSCRIBE_FEED"),
     args: z.object({
-      relMeHref: z.string(),
+      feedUrl: z.string(),
     }),
+  }),
+  z.object({
+    name: z.literal("SYNC_SUBSCRIPTIONS"),
+    args: z.object({}),
   }),
 ]);
 
 export const MessageReturn = {
-  HREF_PAYLOAD: z.void(),
-  FETCH_PROFILE_UPDATE: z.promise(z.boolean()),
+  FEED_DISCOVERED: z.void(),
+  SUBSCRIBE_FEED: z.promise(
+    z.object({
+      status: z.enum(["created", "already_subscribed", "error"]),
+      subscription: z
+        .object({
+          id: z.number(),
+          feed_id: z.number(),
+          title: z.string(),
+          feed_url: z.string(),
+          site_url: z.string(),
+          created_at: z.string(),
+        })
+        .optional(),
+      error: z.string().optional(),
+    }),
+  ),
+  SYNC_SUBSCRIPTIONS: z.void(),
 } satisfies Record<Message["name"], unknown>;
 
 export type Message = z.infer<typeof Message>;
-
-export type Target = "chrome" | "firefox" | "safari";
-
-export type NotProfile = { type: "notProfile" };
-
-export type ProfileData = Profile | NotProfile;
-
-export type NotNullNotUndefined = {};
-
-export type HrefData = {
-  profileData: ProfileData;
-  websiteUrl: string;
-  viewedAt: number;
-  relMeHref: string;
-  updatedAt?: number;
-  hidden?: boolean;
-};
-export type HrefDataType<T extends HrefData["profileData"]["type"]> =
-  HrefData & { profileData: Extract<ProfileData, { type: T }> };
-
-export type HrefStore = Map<string, HrefData>;
-
-export type Webfinger = {
-  subject: string;
-  aliases?: Array<string>;
-  properties?: Record<string, string>;
-  links?: Array<{
-    rel: string;
-    type?: string;
-    href?: string;
-    titles?: Record<string, string>;
-    properties?: Record<string, string>;
-  }>;
-};
 
 export const actionInactive = {
   "16": "/action-inactive-16.png",
@@ -81,13 +91,3 @@ export const actionActive = {
   "32": "/action-active-32.png",
   "38": "/action-active-38.png",
 } as const satisfies Record<string, string>;
-
-export const timeToExpireNotProfile = 10 * 60 * 1_000; // 10 min in milliseconds
-export const timeToUpdateProfile = 1 * 60 * 60 * 1_000; // 1 hr in milliseconds
-
-export const hideProfilesFormId = "hideProfilesFormId";
-
-export enum PopupTab {
-  root = "root",
-  openProfilesWith = "openProfilesWith",
-}

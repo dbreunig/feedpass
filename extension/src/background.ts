@@ -2,7 +2,8 @@ import "webextension-polyfill";
 import { z } from "zod";
 import { Message } from "./util/constants";
 import { runMessageCallback } from "./util/messageCallbacks";
-import { getIconState } from "./util/storage";
+import { getIconState, getCredentials, getSubscriptions } from "./util/storage";
+import * as feedbinApi from "./util/feedbinApi";
 
 browser.runtime.onMessage.addListener(async (msg: unknown) => {
   let message: z.infer<typeof Message>;
@@ -30,7 +31,18 @@ browser.runtime.onInstalled.addListener((details) => {
   });
 });
 
-browser.runtime.onStartup.addListener(() => {
+browser.runtime.onStartup.addListener(async () => {
   // Trigger an onChange to set the correct icon
   getIconState((iconState) => iconState);
+
+  // Sync subscriptions if credentials exist
+  const creds = (await getCredentials()).value;
+  if (creds) {
+    try {
+      const subs = await feedbinApi.getSubscriptions(creds);
+      await getSubscriptions(() => subs);
+    } catch {
+      // Sync failed silently on startup
+    }
+  }
 });
