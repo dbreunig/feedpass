@@ -74,6 +74,27 @@ export const messageCallbacks: {
     return result;
   },
 
+  async UNSUBSCRIBE_FEED(args) {
+    const creds = (await getCredentials()).value;
+    if (!creds) {
+      return { status: "error" as const, error: "Not logged in" };
+    }
+
+    const result = await feedbinApi.unsubscribe(creds, args.subscriptionId);
+
+    if (result.status === "deleted") {
+      // Refresh subscriptions cache
+      try {
+        const subs = await feedbinApi.getSubscriptions(creds);
+        await getSubscriptions(() => subs);
+      } catch {
+        // Non-critical: cache refresh failed
+      }
+    }
+
+    return result;
+  },
+
   async SYNC_SUBSCRIPTIONS() {
     const creds = (await getCredentials()).value;
     if (!creds) {

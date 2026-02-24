@@ -23,15 +23,11 @@ function getCurrentUrlSanitized() {
 const FEED_SELECTOR = [
   'link[rel="alternate"][type="application/rss+xml"]',
   'link[rel="alternate"][type="application/atom+xml"]',
-  'link[rel="alternate"][type="application/feed+json"]',
-  'link[rel="alternate"][type="application/json"]',
 ].join(",");
 
 const TYPE_MAP: Record<string, FeedType> = {
   "application/rss+xml": "rss",
   "application/atom+xml": "atom",
-  "application/feed+json": "json",
-  "application/json": "json",
 };
 
 let currentUrlSanitized = getCurrentUrlSanitized();

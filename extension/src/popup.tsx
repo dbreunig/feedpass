@@ -3,13 +3,13 @@ import * as React from "react";
 import * as ReactDom from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Popover from "@radix-ui/react-popover";
-import type { FeedInfo, FeedType, Message } from "./util/constants";
+import type { FeedInfo, FeedType, FeedbinSubscription, Message } from "./util/constants";
 import { getDisplayHref } from "./util/getDisplayHref";
-import { getIconState, getFeedStore, getCredentials, getSubscriptions, getShowCommentFeeds } from "./util/storage";
+import { getIconState, getFeedStore, getCredentials, getSubscriptions, getShowCommentFeeds, getShowGithubFeeds } from "./util/storage";
 import { cx } from "class-variance-authority";
 import { getHrefProps } from "./util/getHrefProps";
 import { getDisplayHref as getDisplayFeedUrl } from "./util/getDisplayHref";
-import { useFeedStoreQuery, useCredentialsQuery, useShowCommentFeedsQuery } from "./util/reactQuery";
+import { useFeedStoreQuery, useCredentialsQuery, useShowCommentFeedsQuery, useShowGithubFeedsQuery, useSubscriptionsQuery } from "./util/reactQuery";
 import { authenticate } from "./util/feedbinApi";
 
 getIconState(() => {
@@ -41,9 +41,17 @@ function Popup() {
   const feedStoreQuery = useFeedStoreQuery();
   const credentialsQuery = useCredentialsQuery();
   const showCommentFeedsQuery = useShowCommentFeedsQuery();
+  const showGithubFeedsQuery = useShowGithubFeedsQuery();
+  const subscriptionsQuery = useSubscriptionsQuery();
   const popoverCloseRef = React.useRef<HTMLButtonElement>(null);
+  const [activeTab, setActiveTab] = React.useState<"found" | "subscriptions">("found");
 
   const isLoggedIn = !!credentialsQuery.data?.value;
+
+  const foundCount = feedStoreQuery.data
+    ? feedStoreQuery.data.newFeeds.length + feedStoreQuery.data.seenFeeds.length
+    : 0;
+  const subCount = subscriptionsQuery.data?.length ?? 0;
 
   return (
     <div className="relative flex h-[600px] w-[350px] flex-col overflow-auto bg-primaryBg">
@@ -59,59 +67,94 @@ function Popup() {
         <LoginForm />
       ) : (
         <>
+          <div className="mx-12 mt-[10px] flex rounded-6 border border-primaryBorder p-[2px]">
+            <button
+              className={cx(
+                "flex-1 rounded-[4px] py-[3px] text-12 font-medium",
+                activeTab === "found"
+                  ? "bg-faded text-primaryText"
+                  : "text-secondaryText",
+              )}
+              onClick={() => setActiveTab("found")}
+            >
+              Found Feeds
+            </button>
+            <button
+              className={cx(
+                "flex-1 rounded-[4px] py-[3px] text-12 font-medium",
+                activeTab === "subscriptions"
+                  ? "bg-faded text-primaryText"
+                  : "text-secondaryText",
+              )}
+              onClick={() => setActiveTab("subscriptions")}
+            >
+              Subscriptions
+            </button>
+          </div>
+
           <div className="flex grow flex-col gap-[12px] px-12 py-[18px]">
-            {feedStoreQuery.data && (
+            {activeTab === "found" ? (
               <>
-                {feedStoreQuery.data.newFeeds.length > 0 && (
-                  <FeedSection
-                    title="New Feeds"
-                    feeds={feedStoreQuery.data.newFeeds}
-                    variant="new"
-                  />
+                {feedStoreQuery.data && (
+                  <>
+                    {feedStoreQuery.data.newFeeds.length > 0 && (
+                      <FeedSection
+                        title="New Feeds"
+                        feeds={feedStoreQuery.data.newFeeds}
+                        variant="new"
+                      />
+                    )}
+
+                    {feedStoreQuery.data.seenFeeds.length > 0 && (
+                      <FeedSection
+                        title="Previously Seen"
+                        feeds={feedStoreQuery.data.seenFeeds}
+                        variant="seen"
+                      />
+                    )}
+                  </>
                 )}
 
-                {feedStoreQuery.data.seenFeeds.length > 0 && (
-                  <FeedSection
-                    title="Previously Seen"
-                    feeds={feedStoreQuery.data.seenFeeds}
-                    variant="seen"
-                  />
+                {feedStoreQuery.data && foundCount === 0 && (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <p className="pointer-events-auto text-13 text-secondaryText">
+                      No feeds discovered yet. Browse the web!
+                    </p>
+                  </div>
                 )}
-
-                {feedStoreQuery.data.subscribedFeeds.length > 0 && (
-                  <FeedSection
-                    title="Subscribed"
-                    feeds={feedStoreQuery.data.subscribedFeeds}
-                    variant="subscribed"
-                  />
+              </>
+            ) : (
+              <>
+                {subscriptionsQuery.data && subscriptionsQuery.data.length > 0 ? (
+                  <div className="flex flex-col gap-[8px]">
+                    {[...subscriptionsQuery.data]
+                      .sort((a, b) => a.title.localeCompare(b.title))
+                      .map((sub) => (
+                        <SubscriptionRow key={sub.id} subscription={sub} />
+                      ))}
+                  </div>
+                ) : (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <p className="pointer-events-auto text-13 text-secondaryText">
+                      No subscriptions yet.
+                    </p>
+                  </div>
                 )}
               </>
             )}
-
-            {feedStoreQuery.data &&
-              feedStoreQuery.data.newFeeds.length === 0 &&
-              feedStoreQuery.data.seenFeeds.length === 0 &&
-              feedStoreQuery.data.subscribedFeeds.length === 0 && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <p className="pointer-events-auto text-13 text-secondaryText">
-                    No feeds discovered yet. Browse the web!
-                  </p>
-                </div>
-              )}
           </div>
 
           <div className="absolute right-12 top-12 flex gap-8">
-            {feedStoreQuery.data &&
-              feedStoreQuery.data.newFeeds.length +
-                feedStoreQuery.data.seenFeeds.length +
-                feedStoreQuery.data.subscribedFeeds.length >
-                0 && (
-                <span className={cx(button, "text-accent")}>
-                  {feedStoreQuery.data.newFeeds.length +
-                    feedStoreQuery.data.seenFeeds.length +
-                    feedStoreQuery.data.subscribedFeeds.length}
-                </span>
-              )}
+            {activeTab === "found" && foundCount > 0 && (
+              <span className={cx(button, "text-accent")}>
+                {foundCount}
+              </span>
+            )}
+            {activeTab === "subscriptions" && subCount > 0 && (
+              <span className={cx(button, "text-accent")}>
+                {subCount}
+              </span>
+            )}
 
             <Popover.Root modal>
               <Popover.Close hidden ref={popoverCloseRef} />
@@ -162,6 +205,19 @@ function Popup() {
                         className="scale-[0.82]"
                         onChange={async (ev) => {
                           await getShowCommentFeeds(() => ev.target.checked);
+                          queryClient.refetchQueries();
+                        }}
+                      />
+                    </label>
+
+                    <label className={cx(button, "text-accent")}>
+                      Show GitHub Feeds&nbsp;
+                      <input
+                        type="checkbox"
+                        defaultChecked={showGithubFeedsQuery.data}
+                        className="scale-[0.82]"
+                        onChange={async (ev) => {
+                          await getShowGithubFeeds(() => ev.target.checked);
                           queryClient.refetchQueries();
                         }}
                       />
@@ -317,7 +373,7 @@ function FeedSection({
 }: {
   title: string;
   feeds: FeedInfo[];
-  variant: "new" | "seen" | "subscribed";
+  variant: "new" | "seen";
 }) {
   return (
     <div className="flex flex-col gap-[8px]">
@@ -400,14 +456,14 @@ function FeedRow({
   variant,
 }: {
   feed: FeedInfo;
-  variant: "new" | "seen" | "subscribed";
+  variant: "new" | "seen";
 }) {
   const [subscribing, setSubscribing] = React.useState(false);
   const [subscribeResult, setSubscribeResult] = React.useState<
     "created" | "already_subscribed" | "error" | null
   >(null);
 
-  const isSubscribed = variant === "subscribed" || subscribeResult === "created" || subscribeResult === "already_subscribed";
+  const isSubscribed = subscribeResult === "created" || subscribeResult === "already_subscribed";
 
   return (
     <div className="flex items-start gap-6">
@@ -496,6 +552,75 @@ function FeedRow({
           )}
         </button>
       )}
+    </div>
+  );
+}
+
+function SubscriptionRow({ subscription }: { subscription: FeedbinSubscription }) {
+  const [unsubscribing, setUnsubscribing] = React.useState(false);
+  const [unsubResult, setUnsubResult] = React.useState<"deleted" | "error" | null>(null);
+
+  if (unsubResult === "deleted") return null;
+
+  return (
+    <div className="flex items-start gap-6">
+      <div className="flex min-w-0 grow flex-col">
+        <span
+          className="overflow-hidden text-ellipsis whitespace-nowrap text-[13px] text-secondaryText"
+          title={subscription.title}
+        >
+          {subscription.title}
+        </span>
+        <a
+          {...getHrefProps(subscription.site_url)}
+          className="min-w-0 break-all text-[12.5px] leading-[1.5] text-secondaryText"
+        >
+          {getDisplayHref(subscription.site_url)}
+        </a>
+      </div>
+
+      <button
+        className={cx(
+          button,
+          unsubscribing && "opacity-50",
+          unsubResult === "error" ? "text-[--red-10]" : "text-secondaryText",
+        )}
+        disabled={unsubscribing}
+        title="Unsubscribe"
+        onClick={async () => {
+          setUnsubscribing(true);
+          setUnsubResult(null);
+
+          try {
+            const message: Message = {
+              name: "UNSUBSCRIBE_FEED",
+              args: { subscriptionId: subscription.id },
+            };
+            const resp = await browser.runtime.sendMessage(message);
+
+            if (resp && typeof resp === "object" && "status" in resp) {
+              setUnsubResult(resp.status);
+              if (resp.status === "deleted") {
+                queryClient.refetchQueries();
+              }
+            } else {
+              setUnsubResult("error");
+            }
+          } catch {
+            setUnsubResult("error");
+          } finally {
+            setUnsubscribing(false);
+          }
+        }}
+      >
+        {unsubscribing ? (
+          <span className="animate-pulse">…</span>
+        ) : unsubResult === "error" ? (
+          "!"
+        ) : (
+          "\u2212"
+        )}
+      </button>
     </div>
   );
 }

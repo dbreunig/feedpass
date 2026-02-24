@@ -70,3 +70,29 @@ export async function subscribe(
     };
   }
 }
+
+export async function unsubscribe(
+  creds: FeedbinCredentials,
+  subscriptionId: number,
+): Promise<{ status: "deleted" | "error"; error?: string }> {
+  try {
+    const resp = await fetch(
+      `${BASE_URL}/subscriptions/${subscriptionId}.json`,
+      {
+        method: "DELETE",
+        headers: { Authorization: authHeader(creds) },
+      },
+    );
+
+    if (resp.status === 204 || resp.ok) {
+      return { status: "deleted" };
+    }
+
+    return { status: "error", error: `HTTP ${resp.status}` };
+  } catch (err) {
+    return {
+      status: "error",
+      error: err instanceof Error ? err.message : "Unknown error",
+    };
+  }
+}

@@ -50,6 +50,12 @@ export const Message = z.discriminatedUnion("name", [
     }),
   }),
   z.object({
+    name: z.literal("UNSUBSCRIBE_FEED"),
+    args: z.object({
+      subscriptionId: z.number(),
+    }),
+  }),
+  z.object({
     name: z.literal("SYNC_SUBSCRIPTIONS"),
     args: z.object({}),
   }),
@@ -70,6 +76,12 @@ export const MessageReturn = {
           created_at: z.string(),
         })
         .optional(),
+      error: z.string().optional(),
+    }),
+  ),
+  UNSUBSCRIBE_FEED: z.promise(
+    z.object({
+      status: z.enum(["deleted", "error"]),
       error: z.string().optional(),
     }),
   ),

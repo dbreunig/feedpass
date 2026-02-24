@@ -152,6 +152,16 @@ export const getShowCommentFeeds = storageFactory({
   },
 });
 
+export const getShowGithubFeeds = storageFactory({
+  storageKey: "feedpass-show-github-feeds-1",
+  parse(storageData: boolean) {
+    return storageData ?? false;
+  },
+  serialize(data) {
+    return data;
+  },
+});
+
 export const getSubscriptions = storageFactory({
   storageKey: "feedpass-subscriptions-1",
   parse(storageData): FeedbinSubscription[] {
